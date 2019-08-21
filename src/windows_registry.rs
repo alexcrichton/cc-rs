@@ -525,7 +525,7 @@ mod impl_ {
         let key = r"SOFTWARE\Microsoft\Windows Kits\Installed Roots";
         let key = otry!(LOCAL_MACHINE.open(key.as_ref()).ok());
         let root = otry!(key.query_str("KitsRoot10").ok());
-        let readdir = otry!(Path::new(&root).join("lib").read_dir().ok());
+        let readdir = otry!(Path::new(&root).join("include").read_dir().ok());
         let max_libdir = otry!(readdir
             .filter_map(|dir| dir.ok())
             .map(|dir| dir.path())
@@ -541,19 +541,13 @@ mod impl_ {
         Some((root.into(), version))
     }
 
-    // Vcvars finds the correct version of the Windows 10 SDK by looking
-    // for the include `um\Windows.h` because sometimes a given version will
-    // only have UCRT bits without the rest of the SDK. Since we only care about
-    // libraries and not includes, we instead look for `um\x64\kernel32.lib`.
-    // Since the 32-bit and 64-bit libraries are always installed together we
-    // only need to bother checking x64, making this code a tiny bit simpler.
     // Like we do for the Universal CRT, we sort the possibilities
     // asciibetically to find the newest one as that is what vcvars does.
     fn get_sdk10_dir() -> Option<(PathBuf, String)> {
         let key = r"SOFTWARE\Microsoft\Microsoft SDKs\Windows\v10.0";
         let key = otry!(LOCAL_MACHINE.open(key.as_ref()).ok());
         let root = otry!(key.query_str("InstallationFolder").ok());
-        let readdir = otry!(Path::new(&root).join("lib").read_dir().ok());
+        let readdir = otry!(Path::new(&root).join("include").read_dir().ok());
         let mut dirs = readdir
             .filter_map(|dir| dir.ok())
             .map(|dir| dir.path())
@@ -562,7 +556,7 @@ mod impl_ {
         let dir = otry!(dirs
             .into_iter()
             .rev()
-            .filter(|dir| dir.join("um").join("x64").join("kernel32.lib").is_file())
+            .filter(|dir| dir.join("winsdkver.h").is_file())
             .next());
         let version = dir.components().last().unwrap();
         let version = version.as_os_str().to_str().unwrap().to_string();
