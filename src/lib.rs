@@ -1780,55 +1780,20 @@ impl Build {
 
         let objects: Vec<_> = objs.iter().map(|obj| obj.dst.clone()).collect();
         let target = self.get_target()?;
-        if target.contains("msvc") {
+        if target.contains("windows") {
+            let is_msvc = target.contains("msvc");
             let (mut cmd, program) = self.get_ar()?;
-            let mut out = OsString::from("-out:");
-            out.push(dst);
-            cmd.arg(out).arg("-nologo");
+            if is_msvc {
+                let mut out = OsString::from("-out:");
+                out.push(dst);
+                cmd.arg(out).arg("-nologo");
+            } else {
+                cmd.arg("crs").arg(dst);
+            }
             for flag in self.ar_flags.iter() {
                 cmd.arg(flag);
             }
-
-            // Similar to https://github.com/rust-lang/rust/pull/47507
-            // and https://github.com/rust-lang/rust/pull/48548
-            let estimated_command_line_len = objects
-                .iter()
-                .chain(&self.objects)
-                .map(|a| a.as_os_str().len())
-                .sum::<usize>();
-            if estimated_command_line_len > 1024 * 6 {
-                let mut args = String::from("\u{FEFF}"); // BOM
-                for arg in objects.iter().chain(&self.objects) {
-                    args.push('"');
-                    for c in arg.to_str().unwrap().chars() {
-                        if c == '"' {
-                            args.push('\\')
-                        }
-                        args.push(c)
-                    }
-                    args.push('"');
-                    args.push('\n');
-                }
-
-                let mut utf16le = Vec::new();
-                for code_unit in args.encode_utf16() {
-                    utf16le.push(code_unit as u8);
-                    utf16le.push((code_unit >> 8) as u8);
-                }
-
-                let mut args_file = OsString::from(dst);
-                args_file.push(".args");
-                fs::File::create(&args_file)
-                    .unwrap()
-                    .write_all(&utf16le)
-                    .unwrap();
-
-                let mut args_file_arg = OsString::from("@");
-                args_file_arg.push(args_file);
-                cmd.arg(args_file_arg);
-            } else {
-                cmd.args(&objects).args(&self.objects);
-            }
+            self.set_ar_arguments_for_windows(&mut cmd, dst, objects, is_msvc);
             run(&mut cmd, &program)?;
 
             // The Rust compiler will look for libfoo.a and foo.lib, but the
@@ -1884,6 +1849,79 @@ impl Build {
         }
 
         Ok(())
+    }
+
+    // Similar to https://github.com/rust-lang/rust/pull/47507
+    // and https://github.com/rust-lang/rust/pull/48548
+    fn set_ar_arguments_for_windows(
+        &self,
+        cmd: &mut Command,
+        dst: &Path,
+        objects: Vec<PathBuf>,
+        is_msvc: bool,
+    ) {
+        let estimated_command_line_len = objects
+            .iter()
+            .chain(&self.objects)
+            .map(|a| a.as_os_str().len())
+            .sum::<usize>();
+        if estimated_command_line_len > 1024 * 6 {
+            let mut args_file = OsString::from(dst);
+            args_file.push(".args");
+
+            if is_msvc {
+                let mut args = String::from("\u{FEFF}"); // BOM
+                for arg in objects.iter().chain(&self.objects) {
+                    args.push('"');
+                    for c in arg.to_str().unwrap().chars() {
+                        if c == '"' {
+                            args.push('\\')
+                        }
+                        args.push(c)
+                    }
+                    args.push('"');
+                    args.push('\n');
+                }
+
+                let mut utf16le = Vec::new();
+                for code_unit in args.encode_utf16() {
+                    utf16le.push(code_unit as u8);
+                    utf16le.push((code_unit >> 8) as u8);
+                }
+
+                fs::File::create(&args_file)
+                    .unwrap()
+                    .write_all(&utf16le)
+                    .unwrap();
+            } else {
+                let mut args = String::from("");
+                for arg in objects.iter().chain(&self.objects) {
+                    args.push('"');
+                    for c in arg.to_str().unwrap().chars() {
+                        if c == '"' {
+                            args.push('\\')
+                        } else if c == '\\' {
+                            args.push('/');
+                            continue;
+                        }
+                        args.push(c)
+                    }
+                    args.push('"');
+                    args.push('\n');
+                }
+
+                fs::File::create(&args_file)
+                    .unwrap()
+                    .write_all(args.as_bytes())
+                    .unwrap();
+            }
+
+            let mut args_file_arg = OsString::from("@");
+            args_file_arg.push(args_file);
+            cmd.arg(args_file_arg);
+        } else {
+            cmd.args(&objects).args(&self.objects);
+        }
     }
 
     fn ios_flags(&self, cmd: &mut Tool) -> Result<(), Error> {
