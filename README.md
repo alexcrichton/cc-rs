@@ -101,6 +101,13 @@ functions with hard requirements on some variables supplied by [cargo's
 build-script driver][cargo] that it has the `TARGET`, `OUT_DIR`, `OPT_LEVEL`,
 and `HOST` variables.
 
+Note that by default, changing these environment variables from one
+build to the next does not cause Cargo to rerun `build.rs`, and later
+builds may use stale artifacts. One workaround is to `touch build.rs`
+whenever you change these variables. You can also enable automatic
+rebuilding on a case-by-case basis with
+[`rerun-if-env-changed`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script).
+
 [cargo]: http://doc.crates.io/build-script.html#inputs-to-the-build-script
 
 ## Optional features
