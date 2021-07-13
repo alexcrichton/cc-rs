@@ -594,6 +594,12 @@ impl Build {
     ///
     /// The other `cpp_*` options will only become active if this is set to
     /// `true`.
+    ///
+    /// The name of the C++ standard library to link is decided by:
+    /// 1. If [cpp_link_stdlib](Build::cpp_link_stdlib) is set, use its value.
+    /// 2. Else if the `CXXSTDLIB` environment variable is set, use its value.
+    /// 3. Else the default is `libc++` for OS X and BSDs, `libc++_shared` for Android,
+    /// `None` for MSVC and `libstdc++` for anything else.
     pub fn cpp(&mut self, cpp: bool) -> &mut Build {
         self.cpp = cpp;
         self
@@ -686,8 +692,6 @@ impl Build {
     /// Set the standard library to link against when compiling with C++
     /// support.
     ///
-    /// See [`get_cpp_link_stdlib`](cc::Build::get_cpp_link_stdlib) documentation
-    /// for the default value.
     /// If the `CXXSTDLIB` environment variable is set, its value will
     /// override the default value, but not the value explicitly set by calling
     /// this function.
