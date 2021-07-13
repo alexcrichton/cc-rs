@@ -1205,6 +1205,13 @@ impl Build {
         if !msvc || !is_asm || !is_arm {
             cmd.arg("-c");
         }
+        if compiler.family == (ToolFamily::Msvc { clang_cl: true }) {
+            // #513: For `clang-cl`, separate flags/options from the input file.
+            // When cross-compiling macOS -> Windows, this avoids interpreting
+            // common `/Users/...` paths as the `/U` flag and triggering
+            // `-Wslash-u-filename` warning.
+            cmd.arg("--");
+        }
         cmd.arg(&obj.src);
         if cfg!(target_os = "macos") {
             self.fix_env_for_apple_os(&mut cmd)?;
