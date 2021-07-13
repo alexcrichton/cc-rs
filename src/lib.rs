@@ -481,21 +481,13 @@ impl Build {
         }
 
         let mut cmd = compiler.to_command();
-        let is_arm = target.contains("aarch64") || target.contains("arm");
+        let is_msvc = target.contains("msvc");
         let clang = compiler.family == ToolFamily::Clang;
-        command_add_output_file(
-            &mut cmd,
-            &obj,
-            self.cuda,
-            target.contains("msvc"),
-            clang,
-            false,
-            is_arm,
-        );
+        command_add_output_file(&mut cmd, &obj, is_msvc && !clang && !self.cuda);
 
         // We need to explicitly tell msvc not to link and create an exe
         // in the root directory of the crate
-        if target.contains("msvc") && !self.cuda {
+        if is_msvc && !self.cuda {
             cmd.arg("-c");
         }
 
@@ -1179,16 +1171,18 @@ impl Build {
     fn compile_object(&self, obj: &Object) -> Result<(), Error> {
         let is_asm = obj.src.extension().and_then(|s| s.to_str()) == Some("asm");
         let target = self.get_target()?;
-        let msvc = target.contains("msvc");
+        let is_msvc = target.contains("msvc");
         let compiler = self.try_get_compiler()?;
-        let clang = compiler.family == ToolFamily::Clang;
-        let (mut cmd, name) = if msvc && is_asm {
+        let (mut cmd, name, is_msvc_like_output) = if is_msvc && is_asm {
             self.msvc_macro_assembler()?
         } else {
             let mut cmd = compiler.to_command();
             for &(ref a, ref b) in self.env.iter() {
                 cmd.env(a, b);
             }
+
+            cmd.arg("-c");
+
             (
                 cmd,
                 compiler
@@ -1197,14 +1191,11 @@ impl Build {
                     .ok_or_else(|| Error::new(ErrorKind::IOError, "Failed to get compiler path."))?
                     .to_string_lossy()
                     .into_owned(),
+                is_msvc,
             )
         };
-        let is_arm = target.contains("aarch64") || target.contains("arm");
-        command_add_output_file(&mut cmd, &obj.dst, self.cuda, msvc, clang, is_asm, is_arm);
-        // armasm and armasm64 don't requrie -c option
-        if !msvc || !is_asm || !is_arm {
-            cmd.arg("-c");
-        }
+
+        command_add_output_file(&mut cmd, &obj.dst, is_msvc_like_output);
         cmd.arg(&obj.src);
         if cfg!(target_os = "macos") {
             self.fix_env_for_apple_os(&mut cmd)?;
@@ -1756,23 +1747,76 @@ impl Build {
         }
     }
 
-    fn msvc_macro_assembler(&self) -> Result<(Command, String), Error> {
+    fn msvc_macro_assembler(&self) -> Result<(Command, String, bool), Error> {
         let target = self.get_target()?;
-        let tool = if target.contains("x86_64") {
-            "ml64.exe"
-        } else if target.contains("arm") {
-            "armasm.exe"
-        } else if target.contains("aarch64") {
-            "armasm64.exe"
+
+        // Check to see if the user has specified their own assembler
+        let (tool, mut cmd, compile_only, msvc_like_output) = if let Ok(assembler) =
+            self.get_var("AS")
+        {
+            let mut cmd = self.cmd(&assembler);
+
+            // There are several other assemblers we could look for, but `nasm`
+            // seems to be the most solid choice to explicitly support for atm
+            if assembler.contains("nasm") {
+                // Output MSVC-like diagnostics
+                cmd.args(&["-X", "vc"]);
+
+                // We need to specify the output format, the supported formats
+                // can be obtained with `nasm -hf`
+                if target.contains("x86_64") {
+                    cmd.arg("-fwin64");
+                } else if target.contains("x86") {
+                    cmd.arg("-fwin32");
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::ToolExecError,
+                        &format!(
+                            "nasm assembler was specified, but it does not support {}",
+                            target
+                        ),
+                    ));
+                }
+            } else {
+                return Err(Error::new(
+                    ErrorKind::ToolExecError,
+                    &format!(
+                        "Assembler '{}' was specified, but we don't know how to call it",
+                        assembler
+                    ),
+                ));
+            }
+
+            (assembler, cmd, false, false)
         } else {
-            "ml.exe"
+            if !self.get_host()?.contains("windows") {
+                return Err(Error::new(ErrorKind::ToolNotFound, "A macro assembler was not specified via AS, and you are targetting MSVC while not on a Windows host"));
+            }
+
+            let (tool, compile_only) = if target.contains("x86_64") {
+                ("ml64.exe", true)
+            } else if target.contains("arm") {
+                ("armasm.exe", false)
+            } else if target.contains("aarch64") {
+                ("armasm64.exe", false)
+            } else {
+                ("ml.exe", true)
+            };
+
+            let mut cmd = windows_registry::find(&target, tool).unwrap_or_else(|| self.cmd(tool));
+            cmd.arg("-nologo"); // undocumented, yet working with armasm[64]
+
+            // It happens that the x86 assemblers use /Fo for output and
+            // the arm ones use -o, the same as for requiring the -c option
+            // for only assembling and not linking, so we just reuse it here
+            (tool.to_string(), cmd, compile_only, compile_only)
         };
-        let mut cmd = windows_registry::find(&target, tool).unwrap_or_else(|| self.cmd(tool));
-        cmd.arg("-nologo"); // undocumented, yet working with armasm[64]
+
         for directory in self.include_directories.iter() {
             cmd.arg("-I").arg(directory);
         }
-        if target.contains("aarch64") || target.contains("arm") {
+
+        if tool.contains("armasm") {
             println!("cargo:warning=The MSVC ARM assemblers do not support -D flags");
         } else {
             for &(ref key, ref value) in self.definitions.iter() {
@@ -1787,11 +1831,16 @@ impl Build {
         if target.contains("i686") || target.contains("i586") {
             cmd.arg("-safeseh");
         }
+
         for flag in self.flags.iter() {
             cmd.arg(flag);
         }
 
-        Ok((cmd, tool.to_string()))
+        if compile_only {
+            cmd.arg("-c");
+        }
+
+        Ok((cmd, tool.to_string(), msvc_like_output))
     }
 
     fn assemble(&self, lib_name: &str, dst: &Path, objs: &[Object]) -> Result<(), Error> {
@@ -2969,16 +3018,8 @@ fn fail(s: &str) -> ! {
     std::process::exit(1);
 }
 
-fn command_add_output_file(
-    cmd: &mut Command,
-    dst: &Path,
-    cuda: bool,
-    msvc: bool,
-    clang: bool,
-    is_asm: bool,
-    is_arm: bool,
-) {
-    if msvc && !clang && !cuda && !(is_asm && is_arm) {
+fn command_add_output_file(cmd: &mut Command, dst: &Path, msvc_like_output: bool) {
+    if msvc_like_output {
         let mut s = OsString::from("-Fo");
         s.push(&dst);
         cmd.arg(s);
