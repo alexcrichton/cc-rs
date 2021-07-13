@@ -1374,19 +1374,17 @@ impl Build {
             ToolFamily::Msvc { .. } => {
                 cmd.push_cc_arg("-nologo".into());
 
-                let crt_flag = match self.static_crt {
-                    Some(true) => "-MT",
-                    Some(false) => "-MD",
-                    None => {
-                        let features = self
-                            .getenv("CARGO_CFG_TARGET_FEATURE")
-                            .unwrap_or(String::new());
-                        if features.contains("crt-static") {
-                            "-MT"
-                        } else {
-                            "-MD"
-                        }
-                    }
+                let static_crt = self.static_crt.unwrap_or_else(|| {
+                    let features = self
+                        .getenv("CARGO_CFG_TARGET_FEATURE")
+                        .unwrap_or(String::new());
+                    features.contains("crt-static")
+                });
+                let crt_flag = match (static_crt, self.get_debug()) {
+                    (true, true) => "-MTd",
+                    (true, false) => "-MT",
+                    (false, true) => "-MDd",
+                    (false, false) => "-MD",
                 };
                 cmd.push_cc_arg(crt_flag.into());
 

@@ -405,9 +405,33 @@ fn msvc_static_crt() {
 }
 
 #[test]
+fn msvc_static_debug_crt() {
+    let test = Test::msvc();
+    test.gcc()
+        .debug(true)
+        .static_crt(true)
+        .file("foo.c")
+        .compile("foo");
+
+    test.cmd(0).must_have("-MTd");
+}
+
+#[test]
 fn msvc_no_static_crt() {
     let test = Test::msvc();
     test.gcc().static_crt(false).file("foo.c").compile("foo");
 
     test.cmd(0).must_have("-MD");
+}
+
+#[test]
+fn msvc_no_static_debug_crt() {
+    let test = Test::msvc();
+    test.gcc()
+        .debug(true)
+        .static_crt(false)
+        .file("foo.c")
+        .compile("foo");
+
+    test.cmd(0).must_have("-MDd");
 }
